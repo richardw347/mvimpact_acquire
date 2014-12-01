@@ -8,6 +8,23 @@ LINK=mvimpact-acquire
 LDFILE=acquire.conf
 USER=$(whoami)
 
+function createSoftlink {
+    if [ ! -e "$1/$2" ]; then
+        echo "Error: File "$1/$2" does not exist, softlink cannot be created! "
+        exit 1
+    fi
+    if ! [ -L "$1/$3" ]; then
+        ln -fs $2 "$1/$3" >/dev/null 2>&1
+        if ! [ -L "$1/$3" ]; then
+            sudo ln -fs $2 "$1/$3" >/dev/null 2>&1
+            if ! [ -L "$1/$3" ]; then
+                echo "Error: Could not create softlink $1/$3, even with sudo!"
+                exit 1
+            fi
+        fi
+    fi
+}
+
 if [ "$1" == "-h" ] || [ "$1" == "--help" ]; then
    echo
    echo 'Installation script for the '$PRODUCT' driver.'
@@ -133,7 +150,7 @@ echo
 echo "Installation for user:		"$USER " (you can change the owner of "$DEF_DIRECTORY""
 echo "				with 'chown/chmod' )"
 echo "Installation directory:		"$DEF_DIRECTORY
-echo "Source directory:		"$SCRIPTSOURCEDIR
+echo "Source directory:		"$(echo $SCRIPTSOURCEDIR | sed -e 's/\/\.//')
 echo "Version:			"$VERSION
 echo "Platform:			"$TARGET
 echo "TAR-File:			"$TARFILE
@@ -156,20 +173,25 @@ if [ "$YES_NO" == "n" ] || [ "$YES_NO" == "N" ]; then
   exit
 fi
 
-# First of all ask whether to dispose of the old mvIMPACT Acquire installation
-echo "Do you want to remove previous installation (default is 'yes')?"
-echo "This will remove mvIMPACT Acquire for ALL installed Products!!!"
-echo "Hit 'n' + <Enter> for 'no', or just <Enter> for 'yes'."
-read YES_NO
-if [ "$YES_NO" == "n" ] || [ "$YES_NO" == "N" ]; then
-  echo "Previous mvIMPACT Acquire Installation ($MVIMPACT_ACQUIRE_DIR) NOT removed!"
-else
-  sudo rm -rf $MVIMPACT_ACQUIRE_DIR
-  if [ $? == 0 ]; then
-    echo "Previous mvIMPACT Acquire Installation ($MVIMPACT_ACQUIRE_DIR) removed successfully!"
+ # First of all ask whether to dispose of the old mvIMPACT Acquire installation
+if [ "$MVIMPACT_ACQUIRE_DIR" != "" ]; then
+  echo "Do you want to remove previous installation (default is 'yes')?"
+  echo "This will remove mvIMPACT Acquire for ALL installed Products!!!"
+  echo "Hit 'n' + <Enter> for 'no', or just <Enter> for 'yes'."
+  read YES_NO
+  if [ "$YES_NO" == "n" ] || [ "$YES_NO" == "N" ]; then
+    echo "Previous mvIMPACT Acquire Installation ($MVIMPACT_ACQUIRE_DIR) NOT removed!"
   else
-    echo "Error removing previous mvIMPACT Acquire Installation ($MVIMPACT_ACQUIRE_DIR)!"
-    echo "$?"
+    sudo rm -rf $MVIMPACT_ACQUIRE_DIR
+    sudo rm -f /usr/bin/mvDeviceConfigure
+    sudo rm -f /usr/bin/mvIPConfigure
+    sudo rm -f /usr/bin/wxPropView
+    if [ $? == 0 ]; then
+      echo "Previous mvIMPACT Acquire Installation ($MVIMPACT_ACQUIRE_DIR) removed successfully!"
+    else
+      echo "Error removing previous mvIMPACT Acquire Installation ($MVIMPACT_ACQUIRE_DIR)!"
+      echo "$?"
+    fi
   fi
 fi
 
@@ -227,22 +249,34 @@ if [ -r /tmp/$ACT2 ]; then
    cd /tmp
    #tar xvf /tmp/$ACT
    cp -r $ACT2/* $DEF_DIRECTORY
-   cd $DEF_DIRECTORY
-   if grep -q 'MVIMPACT_ACQUIRE_DIR=' $ACQUIRE_EXPORT_FILE; then
-      echo 'MVIMPACT_ACQUIRE_DIR already defined in' $ACQUIRE_EXPORT_FILE.
-   else
-      sudo sh -c "echo 'export MVIMPACT_ACQUIRE_DIR=$DEF_DIRECTORY' >> $ACQUIRE_EXPORT_FILE"
-   fi
-
-   if grep -q "$DEF_DIRECTORY/lib/$TARGET" $ACQUIRE_LDSOCONF_FILE; then
-      echo "$DEF_DIRECTORY/lib/$TARGET already defined in" $ACQUIRE_LDSOCONF_FILE.
-   else
-      sudo sh -c "echo '$DEF_DIRECTORY/lib/$TARGET' >> $ACQUIRE_LDSOCONF_FILE"
-   fi
 else
   echo
   echo "ERROR: Could not read: /tmp/"$ACT2
   exit
+fi
+
+#Set the necessary exports and library paths
+cd $DEF_DIRECTORY
+if grep -q 'MVIMPACT_ACQUIRE_DIR=' $ACQUIRE_EXPORT_FILE; then
+   echo 'MVIMPACT_ACQUIRE_DIR already defined in' $ACQUIRE_EXPORT_FILE.
+else
+   sudo sh -c "echo 'export MVIMPACT_ACQUIRE_DIR=$DEF_DIRECTORY' >> $ACQUIRE_EXPORT_FILE"
+fi
+
+if grep -q "$DEF_DIRECTORY/lib/$TARGET" $ACQUIRE_LDSOCONF_FILE; then
+   echo "$DEF_DIRECTORY/lib/$TARGET already defined in" $ACQUIRE_LDSOCONF_FILE.
+else
+   sudo sh -c "echo '$DEF_DIRECTORY/lib/$TARGET' >> $ACQUIRE_LDSOCONF_FILE"
+fi
+if grep -q "$DEF_DIRECTORY/Toolkits/expat/bin/$TARGET/lib" $ACQUIRE_LDSOCONF_FILE; then
+   echo "$DEF_DIRECTORY/Toolkits/expat/bin/$TARGET/lib already defined in" $ACQUIRE_LDSOCONF_FILE.
+else
+   sudo sh -c "echo '$DEF_DIRECTORY/Toolkits/expat/bin/$TARGET/lib' >> $ACQUIRE_LDSOCONF_FILE"
+fi
+if grep -q "$DEF_DIRECTORY/Toolkits/libudev/bin/$TARGET/lib" $ACQUIRE_LDSOCONF_FILE; then
+   echo "$DEF_DIRECTORY/Toolkits/libudev/bin/$TARGET/lib already defined in" $ACQUIRE_LDSOCONF_FILE.
+else
+   sudo sh -c "echo '$DEF_DIRECTORY/Toolkits/libudev/bin/$TARGET/lib' >> $ACQUIRE_LDSOCONF_FILE"
 fi
 
 # This variable must be exported, or else wxPropView-related make problems can arise (wxPropGrid cannot be found)
@@ -353,8 +387,8 @@ else
    make $TARGET
    sudo /sbin/ldconfig
 
-    # Shall the MV tools be linked in /usr/bin?
-   echo "Do you want to set a link to /usr/bin for wxPropView, mvIPConfigure and mvDeviceConfigure (default is 'yes')?"
+# Shall the MV tools be linked in /usr/bin?
+   echo "Do you want to set a link to /usr/bin for wxPropView and mvDeviceConfigure (default is 'yes')?"
    echo "Hit 'n' + <Enter> for 'no', or just <Enter> for 'yes'."
    read YES_NO
    if [ "$YES_NO" == "n" ] || [ "$YES_NO" == "N" ]; then
@@ -365,11 +399,6 @@ else
          if [ -r $DEF_DIRECTORY/apps/mvPropView/$TARGET/wxPropView ]; then
             sudo rm -f /usr/bin/wxPropView
             sudo ln -s $DEF_DIRECTORY/apps/mvPropView/$TARGET/wxPropView /usr/bin/wxPropView
-         fi
-         # Set mvIPConfigure
-         if [ -r $DEF_DIRECTORY/apps/mvIPConfigure/$TARGET/mvIPConfigure ]; then
-            sudo rm -f /usr/bin/mvIPConfigure
-            sudo ln -s $DEF_DIRECTORY/apps/mvIPConfigure/$TARGET/mvIPConfigure /usr/bin/mvIPConfigure
          fi
          # Set mvDeviceConfigure
          if [ -r $DEF_DIRECTORY/apps/mvDeviceConfigure/$TARGET/mvDeviceConfigure ]; then
